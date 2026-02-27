@@ -36,7 +36,7 @@ void FillHistogram(ActRoot::CalibrationManager *calman, ActRoot::TPCParameters *
                             Qiaux = calman->ApplyPadAlignment(where, Qiaux);
                         // Fill histogram
 
-                        if (Qiaux >= 00) // in this experiment all runs have a baseline that we eliminate
+                        if (Qiaux >= 200) // in this experiment all runs have a baseline that we eliminate
                         {
                             h->Fill(where, Qiaux);
                         }
@@ -52,10 +52,10 @@ void ReadGainMatching(bool isMatched = true)
 
     // Get the data into TChain
     auto chain{new TChain("ACTAR_TTree")};
-    std::vector<int> runs{85, 86, 87, 89, 91, 92}; // Put whichever runs needed (this was for e796)
+    std::vector<int> runs{140, 142, 144}; // Put whichever runs needed (this was for s2008)
     for (const auto &run : runs)
     {
-        chain->Add(TString::Format("../../RootFiles/Raw/Tree_Run_%04d_Merged.root", run));
+        chain->Add(TString::Format("../../RootFiles/Raw/Tree_Run_%04d.root", run));
     }
 
     // Set the parameters
@@ -64,7 +64,7 @@ void ReadGainMatching(bool isMatched = true)
     ActRoot::CalibrationManager calman{};
     calman.ReadLookUpTable("../Actar/LT.txt"); // convert LT file in a string line
     if (isMatched)
-        calman.ReadPadAlign("./Outputs/gain_matching_s2384_v0.dat");
+        calman.ReadPadAlign("./Outputs/gain_matching_s2008.dat");
 
     // Create histogram
     auto *h{new TH2D{"h", "pads;Channel number;Calibrated charge [u.a.]", 17408, 0, 17408, 800, 0, 5000}};

@@ -23,7 +23,8 @@ void vDriftfromAlpha()
 {
     ROOT::EnableImplicitMT();
     // Get the data run 123
-    auto df{ROOT::RDataFrame("GETTree", "../../RootFiles/Cluster/Clusters_Run_0022.root")};
+    int run = 19;
+    auto df{ROOT::RDataFrame("GETTree", TString::Format("../../RootFiles/Cluster/Clusters_Run_00%d.root",run))};
 
     // df.Describe().Print();
 
@@ -32,7 +33,7 @@ void vDriftfromAlpha()
                                  {
         if(d.fClusters.size() != 1)
         {
-            ROOT::Math::XYZPointF lastPoint {-100, -100, -100};
+            ROOT::Math::XYZPointF lastPoint {-1000, -1000, -1000};
             return lastPoint;
         }
         else
@@ -51,7 +52,7 @@ void vDriftfromAlpha()
                                            {
         if(d.fClusters.size() != 1)
         {
-            ROOT::Math::XYZPointF otherPoint {-100, -100, -200};
+            ROOT::Math::XYZPointF otherPoint {-1000, -1000, -2000};
             return otherPoint;
         }
         else
@@ -71,8 +72,8 @@ void vDriftfromAlpha()
 
     // Plot
     auto c = new TCanvas("c", "Points XY", 1000, 500);
-    auto hLast = dfXY.Histo2D({"hLast", "LastPoint XY;X [pads];Y [pads]", 1000, -200, 200, 1000, -200, 200}, "fLastX", "fLastY");
-    auto hOther = dfXY.Histo2D({"hOther", "OtherPoint XY;X [pads];Y [pads]", 1000, -200, 200, 1000, -200, 200}, "fOtherX", "fOtherY");
+    auto hLast = dfXY.Histo2D({"hLast", "LastPoint XY;X [pads];Y [pads]", 1000, -100, 150, 1000, -100, 150}, "fLastX", "fLastY");
+    auto hOther = dfXY.Histo2D({"hOther", "OtherPoint XY;X [pads];Y [pads]", 1000, -100, 150, 1000, -100, 150}, "fOtherX", "fOtherY");
     hLast->DrawClone("colz");
     hOther->DrawClone("same");
 
@@ -141,8 +142,8 @@ void vDriftfromAlpha()
     auto c1 = new TCanvas("c1", "Delta Z vs Lxy", 1400, 800);
     c1->DivideSquare(2);
     c1->cd(1);
-    // graphDrift->GetXaxis()->SetRangeUser(-20,-20);
-    // graphDrift->GetYaxis()->SetRangeUser(0,20);
+    graphDrift->GetXaxis()->SetRangeUser(-20,20);
+    graphDrift->GetYaxis()->SetRangeUser(0,20);
     graphDrift->DrawClone("AP");
     c1->cd(2);
     graphDriftLinear->DrawClone("AP");
@@ -151,9 +152,12 @@ void vDriftfromAlpha()
     ActRoot::CutsManager<std::string> cuts;
     // Gas PID
     cuts.ReadCut("goodEvents", "./Inputs/cut_DriftVelocity_GoodAlphaEvents.root");
-    cuts.ReadCut("first", "./Inputs/cut_firstPeak.root");
-    cuts.ReadCut("second", "./Inputs/cut_secondPeak.root");
-    cuts.ReadCut("third", "./Inputs/cut_thirdPeak.root");
+    cuts.ReadCut("first", TString::Format("./Inputs/cut_firstPeak_%d.root", run).Data());
+    cuts.ReadCut("second", TString::Format("./Inputs/cut_secondPeak_%d.root", run).Data());
+    cuts.ReadCut("third", TString::Format("./Inputs/cut_thirdPeak_%d.root", run).Data());
+
+    c1->cd(1);
+    cuts.DrawCut("goodEvents");
 
     auto dfFiltered = dfDrift.Filter([&](double lxy, double deltaZ)
                                 { return cuts.IsInside("goodEvents", deltaZ, lxy); },
@@ -193,25 +197,30 @@ void vDriftfromAlpha()
     graphDriftLineThird->SetTitle("Delta Z^2 vs Lxy^2 (third peak);(#Deltat)^{2} [#mus^{2}];(#Deltaxy)^{2} [cm^{2}]");
     graphDriftLineThird->Fit("pol1");
     auto f3 {graphDriftLineThird->GetFunction("pol1")};
-    auto c3 = new TCanvas("c3", "Delta Z vs Lxy lines", 2100, 700);
-    c3->DivideSquare(3);
-    c3->cd(1);
-    graphDriftLineFirst->DrawClone("AP");
-    f1->Draw("same");
-    c3->cd(2);
-    graphDriftLineSecond->DrawClone("AP");
-    f2->Draw("same");
-    c3->cd(3);
-    graphDriftLineThird->DrawClone("AP");
-    f3->Draw("same");
+    // auto c3 = new TCanvas("c3", "Delta Z vs Lxy lines", 2100, 700);
+    // c3->DivideSquare(3);
+    // c3->cd(1);
+    // graphDriftLineFirst->DrawClone("AP");
+    // f1->Draw("same");
+    // c3->cd(2);
+    // graphDriftLineSecond->DrawClone("AP");
+    // f2->Draw("same");
+    // c3->cd(3);
+    // graphDriftLineThird->DrawClone("AP");
+    // f3->Draw("same");
+
 
     // Draw them also in the filtered plot
     c2->cd(2);
     f1->DrawClone("same");
+    cuts.DrawCut("first");
     f2->SetLineColor(kGreen);
     f2->DrawClone("same");
+    cuts.DrawCut("second");
     f3->SetLineColor(kBlue);
     f3->DrawClone("same");
+    cuts.DrawCut("third");
+
     // Text of the fit parameters
     auto t1 = new TLatex(60, 200, TString::Format("First peak: Vdrift = %.2f#pm%.2f ", TMath::Sqrt(-f1->GetParameter(1)), TMath::Sqrt(f1->GetParError(1))));
     auto t2 = new TLatex(60, 180, TString::Format("Second peak: Vdrift = %.2f#pm%.2f", TMath::Sqrt(-f2->GetParameter(1)), TMath::Sqrt(f2->GetParError(1))));

@@ -324,5 +324,11 @@ void multiRuns_vDriftfromAlpha()
     l->AddEntry(hDrifts, "Drift measurements");
     l->AddEntry(hTheo, "Garfield");
     l->Draw();
+
+    auto run129 = new TLine((6000. - 480.) / 23.5, 0., (6000. - 480.) / 23.5, 1.);
+    run129->SetLineColor(kMagenta);
+    run129->SetLineWidth(2);
+    run129->SetLineStyle(kDashed);
+    run129->Draw("same");
     c3->SaveAs("vdrift_runs19-24.png");
 }

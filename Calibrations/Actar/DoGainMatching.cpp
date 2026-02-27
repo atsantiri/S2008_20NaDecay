@@ -6,11 +6,12 @@
 #include "TF1.h"
 #include "TStyle.h"
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 
 std::vector<double> GetPeaks(TH2D *h, int c)
 {
-    auto bin {h->GetXaxis()->FindBin(c)}; // Get the bin number for the channel c
+    auto bin{h->GetXaxis()->FindBin(c)}; // Get the bin number for the channel c
     auto *proj{h->ProjectionY("proj", bin, bin)};
 
     auto *spe{new TSpectrum(11)}; // max nums of peaks, is overstimated
@@ -39,7 +40,7 @@ std::vector<double> GetPeaks(TH2D *h, int c)
     return meanPeak;
 }
 
-void FillGraph(int channel, TGraph *graph, const std::vector<double> &x, const std::vector<double> &y, std::ofstream &streamer, TGraph* gcal)
+void FillGraph(int channel, TGraph *graph, const std::vector<double> &x, const std::vector<double> &y, std::ofstream &streamer, TGraph *gcal)
 {
     if (x.size() != y.size())
     {
@@ -62,7 +63,7 @@ void FillGraph(int channel, TGraph *graph, const std::vector<double> &x, const s
     else
     {
         streamer << f->GetParameter(0) << " " << f->GetParameter(1) << " " << f->GetParameter(2) << std::endl;
-        //Apply calibrationto first peak
+        // Apply calibrationto first peak
         gcal->AddPoint(channel, f->Eval(x.front()));
     }
 }
@@ -85,37 +86,46 @@ void DoGainMatching()
 
     // Now we have to do the fit Q vs Q ref, we use a TGraph, for filling it need a for loop
 
-    std::ofstream streamer{"./Outputs/gain_matching_s2384_v0.dat"};
+    std::ofstream streamer{"./Outputs/gain_matching_s2008.dat"};
 
     std::vector<TGraph *> gs;
-    TGraph* graphParams{new TGraph()};
-    int idx {-1};
+    TGraph *graphParams{new TGraph()};
+    int idx{-1};
     for (const auto &peak : peaks)
     {
         idx++;
-        if (peak.size() != peaks[channelRef-1].size())
+        if (peak.size() != peaks[channelRef - 1].size())
         {
-            std::cout<<"Channel : "<<idx<<'\n';
-            for(const auto& val : peak)
+            std::cout << "Channel : " << idx << '\n';
+            for (const auto &val : peak)
             {
-                std::cout<<"   " << val<<' ';
+                std::cout << "   " << val << ' ';
             }
             continue;
         }
         graphParams->SetPoint(idx, idx, peak[0]);
     }
-    auto* gCal {new TGraph};
+    auto *gCal{new TGraph};
     gCal->SetTitle("First peak cal;Channel;Charge");
-    int channel {0};
+    int channel{0};
+    int zeros{0};
+
     for (const auto &peak : peaks)
     {
         TGraph *graph{new TGraph()};
-        FillGraph(channel, graph, peak, peaks[channelRef-1], streamer, gCal);
+        if (peak.size() != peaks[channelRef - 1].size())
+            zeros++;
+        FillGraph(channel, graph, peak, peaks[channelRef - 1], streamer, gCal);
         graph->SetMarkerStyle(24);
         gs.push_back(graph);
         channel++;
     }
     streamer.close();
+
+    double perc_failed {(zeros - 1024.) / 16834.}; // how many pads failed? (account for the 1024 (=4*256) FPN channels)
+    std::cout << "\n ------------- \n"
+              << std::fixed << std::setprecision(2) << perc_failed * 100 << " % (" << std::fixed << std::setprecision(0)
+              << perc_failed * 16834 << " out of 16834) of the pads didn't get gainmatched " << std::endl;
 
     gStyle->SetOptFit(true);
     auto *c{new TCanvas("c")};

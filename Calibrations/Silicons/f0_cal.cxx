@@ -110,7 +110,7 @@ void f0_cal()
     auto* gr {new TGraphErrors};
     gr->SetNameTitle("g", "Resolution;;#sigma ^{241}Am [keV]");
     // Save
-    std::ofstream streamer {"./Outputs/s2008_" + which + ".dat"};
+    std::ofstream streamer {"./Outputs/s2008_" + which + "_run004.dat"};
     streamer << std::fixed << std::setprecision(8);
     std::vector<std::shared_ptr<TH1D>> hfs;
     for(int s = 0; s < hsrebin.size(); s++)
@@ -125,7 +125,7 @@ void f0_cal()
         runners.emplace_back(&source, hsrebin[s], hs[s], false);
         auto& run {runners.back()};
         run.SetGaussPreWidth(60);
-        run.SetRange(2300, 3500);
+        run.SetRange(2400, 3500);
         run.DisableXErrors();
         // if(s == 11)
         //     run.SetMaxSigma(0.1);
@@ -158,7 +158,7 @@ void f0_cal()
     {
         c0->cd(i + 1);
         gPad->SetLogy();
-        hs[i]->GetXaxis()->SetRangeUser(0, 3000);
+        hs[i]->GetXaxis()->SetRangeUser(0, 3200);
         hs[i]->Draw();
     }
 

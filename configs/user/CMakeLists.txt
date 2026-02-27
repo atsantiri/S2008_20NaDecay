@@ -9,3 +9,4 @@ include(${ACTROOT}/Scripts.cmake)
 # First user action
 add_userlibrary(NAME RecRANSAC SOURCES RecRANSAC.h RecRANSAC.cxx LINK ActAlgorithm)
 add_userlibrary(NAME FilterDecay SOURCES FilterDecay.h FilterDecay.cxx LINK ActAlgorithm)
+add_userlibrary(NAME CorrelateImplantDecay SOURCES CorrelateImplantDecay.h CorrelateImplantDecay.cxx LINK ActAlgorithm)
