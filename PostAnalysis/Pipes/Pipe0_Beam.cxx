@@ -6,6 +6,7 @@
 #include "ActTypes.h"
 
 #include "ROOT/RDataFrame.hxx"
+#include "ROOT/TThreadedObject.hxx"
 
 #include "TCanvas.h"
 #include "TROOT.h"
@@ -13,7 +14,7 @@
 #include <atomic>
 #include <utility>
 
-void Pipe0_Beam(const std::string& beam)
+void Pipe0_Beam()
 {
     std::string dataconf {"./../configs/data.conf"};
 
@@ -30,49 +31,35 @@ void Pipe0_Beam(const std::string& beam)
     auto defGat {df.Define("GATCONF", [](ActRoot::ModularData& mod)
                            { return static_cast<int>(mod.fLeaves["GATCONF"]); }, {"ModularData"})};
 
-    // Get plots for DE/E for beam, first 10 pads, until x = 10.
-    auto defBeam {defGat.Filter("fBeamIdx != -1")
-                      .Define("Pair",
-                              [](ActRoot::TPCData& d, ActRoot::MergerData& m)
-                              {
-                                  int beamIdx {m.fBeamIdx};
-                                  auto beamCluster {d.fClusters[beamIdx]};
-                                  auto voxels {beamCluster.GetRefToVoxels()};
-                                  double dE {0}; // DeltaE in first 10 pads
-                                  double E {};   // Total energy
-                                  for(auto& v : voxels)
-                                  {
-                                      auto q {v.GetCharge()};
-                                      if(v.GetPosition().X() < 10)
-                                          dE += q;
-                                      E += q;
-                                  }
-                                  return std::make_pair(dE, E);
-                              },
-                              {"TPCData", "MergerData"})
-                      .Define("dE", "Pair.first")
-                      .Define("E", "Pair.second")};
-
     // Book histograms
     auto hGATCONF {defGat.Histo1D("GATCONF")};
-    auto hdEE {
-        defBeam.Histo2D({"hdEE", "Beam ID;Q_{total} [au];Q_{10 pads} [au]", 300, 0, 1e5, 300, 0, 1e5}, "E", "dE")};
+    ROOT::TThreadedObject<TH2D> h2d("hPad", "Pad plane;X [pad];Y [pad]", 128, 0, 128, 128, 0, 128);
 
     // And cound CFA triggers
     std::atomic<unsigned long int> cfa {};
     defGat.Foreach(
-        [&](const int& gatconf)
+        [&](const int& gatconf, ActRoot::TPCData& tpc)
         {
             if(gatconf == 64)
                 cfa++;
+
+            for(const auto& cluster : tpc.fClusters)
+            {
+                for(const auto& v : cluster.GetVoxels())
+                {
+                    auto& pos {v.GetPosition()};
+                    h2d->Fill(pos.X(), pos.Y());
+                }
+            }
         },
-        {"GATCONF"});
+        {"GATCONF", "TPCData"});
+
 
     // Draw
     auto* c0 {new TCanvas {"c00", "Pipe 0 canvas 0"}};
-    c0->DivideSquare(4);
+    c0->DivideSquare(2);
     c0->cd(1);
-    hdEE->DrawClone("colz");
+    h2d.Merge()->DrawClone("colz");
     c0->cd(2);
     hGATCONF->DrawClone();
 

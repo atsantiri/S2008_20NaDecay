@@ -15,6 +15,8 @@
 
 // This macro assumes that data was processed with user filter [CorrelateImplantDecay] enabled and
 // "EnableDeleteInvalidCluster" of [FindRP] set to false!
+// 
+// Note: Event building window wasn't large enough for the halflife, this doesn't work :')
 void plotdZ()
 {
     ActRoot::DataManager dataman {"../../configs/data.conf", ActRoot::ModeType::EFilter};
@@ -33,7 +35,7 @@ void plotdZ()
     ActRoot::InputParser parserMA {"../../configs/multiaction.conf"};
     auto bl2 {parserMA.GetBlock("CorrelateImplantDecay")};
     auto minLxy {bl2->GetDouble("MinLength")};
-    std::cout<<minLxy<<std::endl;
+    std::cout << minLxy << std::endl;
 
     ROOT::EnableImplicitMT();
     ROOT::RDataFrame d {*chain};
@@ -50,26 +52,26 @@ void plotdZ()
 
     auto dff =
         df.Define("beamLastPoint",
-                 [](ActRoot::TPCData& tpc)
-                 {
-                     ROOT::Math::XYZPointF lastPoint {-1000, -1000, -1000};
-                     auto& clusters = tpc.fClusters;
-                     ActRoot::Cluster beamLike;
+                  [](ActRoot::TPCData& tpc)
+                  {
+                      ROOT::Math::XYZPointF lastPoint {-1000, -1000, -1000};
+                      auto& clusters = tpc.fClusters;
+                      ActRoot::Cluster beamLike;
 
-                     for(auto& c : clusters)
-                     {
-                         if(c.GetIsBeamLike())
-                             beamLike = c;
-                     }
-                     auto line {beamLike.GetRefToLine()};
-                     auto dir {line.GetDirection()};
-                     beamLike.SortAlongDir(dir);
-                     auto lastVoxel {beamLike.GetRefToVoxels().back()};
-                     lastPoint = line.ProjectionPointOnLine(lastVoxel.GetPosition());
+                      for(auto& c : clusters)
+                      {
+                          if(c.GetIsBeamLike())
+                              beamLike = c;
+                      }
+                      auto line {beamLike.GetRefToLine()};
+                      auto dir {line.GetDirection()};
+                      beamLike.SortAlongDir(dir);
+                      auto lastVoxel {beamLike.GetRefToVoxels().back()};
+                      lastPoint = line.ProjectionPointOnLine(lastVoxel.GetPosition());
 
-                     return lastPoint;
-                 },
-                 {"TPCData"})
+                      return lastPoint;
+                  },
+                  {"TPCData"})
             .Define("decayFirstPoint",
                     [&](ActRoot::TPCData& tpc, ROOT::Math::XYZPointF beamPoint)
                     {
@@ -101,8 +103,10 @@ void plotdZ()
                                 }
                             }
                         }
-                        if (!hasDecay){
-                            throw std::runtime_error("I'm confusion, I didn't find a decay. Is your filter working??");
+                        if(!hasDecay)
+                        {
+                            throw std::runtime_error(
+                                "I'm confusion, I didn't find a decay. Is your correlator working??");
                         }
                         return firstPoint;
                     },
@@ -112,12 +116,13 @@ void plotdZ()
                     {
                         double dZ = beamPoint.Z() - decayPoint.Z();
                         // std::cout << dZ << std::endl;
-                        return dZ;
+                        return dZ * 0.32; // Conversion factor from btb to micro seconds
                     },
                     {"beamLastPoint", "decayFirstPoint"});
 
 
-    auto hdZ = dff.Histo1D({"hdZ", "dZ;dZ [btb];", 1000, -500, 500}, "dZ");
+    auto hdZ = dff.Histo1D({"hdZ", "dZ;dZ [us];", 1000, -50, 50}, "dZ");
     auto* c {new TCanvas("c", "c", 800, 600)};
     hdZ->DrawClone("hist");
+    c->SetLogy();
 }
