@@ -10,10 +10,10 @@
 
 #include "ROOT/RDF/RInterface.hxx"
 #include "ROOT/RDataFrame.hxx"
-#include "ROOT/TThreadedObject.hxx"
 
 #include "TCanvas.h"
 #include "TLatex.h"
+#include "TLegend.h"
 #include "TLine.h"
 #include "TMath.h"
 #include <TF1.h>
@@ -70,7 +70,7 @@ findStartVoxel(ActRoot::Cluster& c, bool returnStart) // compute the distance to
 
     for(const auto& v : c.GetVoxels())
     {
-        auto pos {v.GetPosition()};
+        ROOT::Math::XYZPointF pos = v.GetPosition();
         auto q {v.GetCharge()};
 
         qtot += q;
@@ -85,9 +85,8 @@ findStartVoxel(ActRoot::Cluster& c, bool returnStart) // compute the distance to
     ycm /= qtot;
     zcm /= qtot;
     ROOT::Math::XYZPointF rcm(xcm, ycm, zcm);
-
-    auto A {c.GetRefToVoxels().front().GetPosition()};
-    auto B {c.GetRefToVoxels().back().GetPosition()};
+    ROOT::Math::XYZPointF A = c.GetRefToVoxels().front().GetPosition();
+    ROOT::Math::XYZPointF B = c.GetRefToVoxels().back().GetPosition();
     float dA = (A - rcm).R();
     float dB = (B - rcm).R();
 
@@ -114,7 +113,7 @@ std::vector<std::pair<double, double>> getChargeProf(ActRoot::Cluster& c, ROOT::
 
     for(const auto& v : c.GetVoxels())
     {
-        auto pos = v.GetPosition();
+        ROOT::Math::XYZPointF pos = v.GetPosition();
         double q = v.GetCharge();
         ScalePoint(pos, xy, drift);
         double s = (pos - start).Dot(dir.Unit());
@@ -188,7 +187,7 @@ double FindPositionFromChargeFraction(
     return h->GetXaxis()->GetXmax();
 }
 
-TF1* FitSRIMtoChargeProfile(TH1* hcharge, TSpline3* srimSpline)
+TF1* FitSRIMtoChargeProfile(TH1* hcharge, TSpline3* srimSpline, TString fname)
 {
     if(!srimSpline || !hcharge)
         return nullptr;
@@ -197,15 +196,14 @@ TF1* FitSRIMtoChargeProfile(TH1* hcharge, TSpline3* srimSpline)
     double xmax = FindPositionFromChargeFraction(hcharge, 0.999);
     double xmaxSpline = srimSpline->GetXmax();
 
-    std::cout << "Fitting range: " << xmin << " " << xmax << std::endl;
+    // std::cout << "Fitting range: " << xmin << " " << xmax << std::endl;
 
     TF1* fit = new TF1(
-        "fSRIM",
+        fname,
         [=](double* x, double* p)
         {
             double xs = x[0];
-            // double xShifted = xs + p[1]; // match endpoint of spline to charge profile
-            double xShifted = p[2] * (xs - xmax) + xmaxSpline + p[1]; // stretch + endpoint alignment
+            double xShifted = xs + p[1]; // match endpoint of spline to charge profile
 
             if(xShifted < srimSpline->GetXmin() || xShifted > srimSpline->GetXmax())
                 return 0.0;
@@ -217,17 +215,15 @@ TF1* FitSRIMtoChargeProfile(TH1* hcharge, TSpline3* srimSpline)
 
             return p[0] * val;
         },
-        xmin, xmax, 3);
+        xmin, xmax, 2);
 
-    fit->SetParameters(hcharge->Integral("width") / hcharge->GetNbinsX(),   // amplitude
-                       xmaxSpline - xmax,                                   // shift
-                       (xmaxSpline - srimSpline->GetXmin()) / (xmax - xmin) // stretch
-    );
+    fit->SetParameters(hcharge->Integral("width") / hcharge->GetNbinsX(), // amplitude
+                       xmaxSpline - xmax);                                // shift
+
     fit->SetParName(0, "amplitude");
     fit->SetParName(1, "shift");
-    fit->SetParName(2, "stretch");
     fit->SetParLimits(0, 0, 1e8);
-    fit->SetParLimits(1, -20, 20);
+    fit->SetParLimits(1, -150, 150);
 
     fit->SetNpx(3000);
 
@@ -282,6 +278,19 @@ calcTLfromChargeFit(TF1* f, double xMin, double xMax) // find location where fit
 
 void alphaSpectrum_ChargeFit()
 {
+    // ========================================================================================================================================
+    ROOT::Math::XYZPointF beamEndPoint {105, 65, 0}; // visually inspected output of Pipe0
+    double maxDist {2.};                             // max distance from beam stop point
+    double edge {5.};                                // min distance from Z wall to remove tracks
+                                                     // that come from the pad plane - 20Na drifted before decaying
+    bool debug {false}; // set to true if we're testing. Otherwise we will do only few events
+    int kmax {15};     // how many events to look at
+    std::string srimfile {"../../Calibrations/SRIM/4He_950mbar_95-5.txt"};    
+    double qval {-4.73};
+    double ma {4.0026};      // amu
+    double mo16 {15.994914}; // amu
+    // ========================================================================================================================================
+
     ActRoot::DataManager dataman {"../../configs/data.conf", ActRoot::ModeType::EFilter};
     auto chain {dataman.GetChain()};
     auto chain2 {dataman.GetChain(ActRoot::ModeType::EMerge)};
@@ -289,7 +298,6 @@ void alphaSpectrum_ChargeFit()
     auto chain3 {dataman.GetChain(ActRoot::ModeType::EReadSilMod)};
     chain->AddFriend(chain3.get());
 
-    ROOT::EnableImplicitMT();
     ROOT::RDataFrame d {*chain};
 
     ActRoot::TPCParameters TPCparams {"Actar"};
@@ -298,33 +306,26 @@ void alphaSpectrum_ChargeFit()
     auto drift {bl1->GetDouble("DriftFactor")};
     std::cout << drift << std::endl;
 
-    ROOT::TThreadedObject<TH2F> hPad("hPad", "Pad;X [pad];Y [pad]", TPCparams.GetNPADSX(), 0, TPCparams.GetNPADSX(),
-                                     TPCparams.GetNPADSY(), 0, TPCparams.GetNPADSY());
-    ROOT::TThreadedObject<TH2F> hSide("hSide", "Side;X [pad];Z [tb]", TPCparams.GetNPADSX(), 0, TPCparams.GetNPADSX(),
-                                      TPCparams.GetNPADSZ() / 4, 0, TPCparams.GetNPADSZ());
-    ROOT::TThreadedObject<TH1F> hEne("hEne", "Alpha Energy; E_{#alpha} [MeV]; ", 400, 0, 7);
-    ROOT::TThreadedObject<TH1F> hEx("hEx", "Excitation Energy; E_{20Ne*} [MeV]; ", 400, 4, 14);
-    std::cout << TPCparams.GetNPADSZ() << " " << TPCparams.GetREBINZ() << std::endl;
-    ROOT::Math::XYZPointF beamEndPoint {105, 65, 0}; // visually inspected output of Pipe0
-    double maxDist {2.};                             // max distance from beam stop point
-    double edge {5.};                                // min distance from Z wall to remove tracks
-                                                     // that come from the pad plane - 20Na drifted before decaying
+    auto hPad = new TH2F("hPad", "Pad;X [pad];Y [pad]", TPCparams.GetNPADSX(), 0, TPCparams.GetNPADSX(),
+                         TPCparams.GetNPADSY(), 0, TPCparams.GetNPADSY());
 
+    auto hSide = new TH2F("hSide", "Side;X [pad];Z [tb]", TPCparams.GetNPADSX(), 0, TPCparams.GetNPADSX(),
+                          TPCparams.GetNPADSZ() / 4, 0, TPCparams.GetNPADSZ());
+
+    auto hEne = new TH1F("hEne", "Alpha Energy; E_{#alpha} [MeV]; ", 200, 0, 7);
+    auto hEne2 = new TH1F("hEneVoxel", "Alpha Energy; E_{#alpha} [MeV]; ", 200, 0, 7);
+    auto hEx = new TH1F("hEx", "Excitation Energy; E_{20Ne*} [MeV]; ", 200, 4, 14);
+    auto hEx2 = new TH1F("hExVoxel", "Excitation Energy; E_{20Ne*} [MeV]; ", 200, 4, 14);
+    std::cout << TPCparams.GetNPADSZ() << " " << TPCparams.GetREBINZ() << std::endl;
 
     auto* srim {new ActPhysics::SRIM()};
     const std::string& particleKey = "HeInGas";
-    srim->ReadTable(particleKey, "../../Calibrations/SRIM/4He_950mbar_95-5.txt");
-    auto srimSpline {buildSRIMspline(srim, 50, particleKey)};
-    // srim->ReadTable("HeInGas", "../../Calibrations/SRIM/He_actar_192g_1.07_38.8stoich.txt");
+    srim->ReadTable(particleKey, srimfile);
+    auto srimSpline {buildSRIMspline(srim, 100, particleKey)};
 
     ROOT::Math::XYZVectorF beam = {1, 0, 0};
-    double qval {-4.73};
-    double ma {4.0026};      // amu
-    double mo16 {15.994914}; // amu
+
     std::vector<std::shared_ptr<TPolyLine>> ls;
-
-
-    bool debug {true}; // set to true if we're testing. Otherwise we will do only few events
     std::vector<double> xsA, ysA, xsB, ysB;
     using SQ = std::vector<std::pair<double, double>>;
     std::vector<SQ> allChargeProfiles;
@@ -339,7 +340,7 @@ void alphaSpectrum_ChargeFit()
                 auto& clusters = tpc.fClusters;
                 for(auto& c : clusters)
                 {
-                    if(k < 10 || !debug)
+                    if((k < kmax) || !debug)
                     {
                         if(!c.GetIsBeamLike())
                         {
@@ -375,17 +376,18 @@ void alphaSpectrum_ChargeFit()
                                 // get charge profile
                                 SQ sq = getChargeProf(c, startVoxelPos, endVoxelPos, dir, drift);
                                 allChargeProfiles.push_back(std::move(sq));
+                                TLsfromVoxels.push_back(calcTL(startVoxelPos, endVoxelPos, line, drift));
+
                                 if(debug)
                                 {
                                     xsA.push_back(startVoxelPos.X());
                                     ysA.push_back(startVoxelPos.Y());
-                                    TLsfromVoxels.push_back(calcTL(startVoxelPos, endVoxelPos, line, drift));
                                 }
-
                                 k++;
                             }
                         }
                     }
+                    // k++;
                 }
             }
         },
@@ -393,6 +395,8 @@ void alphaSpectrum_ChargeFit()
 
 
     // Draw
+    std::cout << "size " << allChargeProfiles.size() << std::endl;
+    int badfits {0};
 
     if(debug)
     {
@@ -401,14 +405,14 @@ void alphaSpectrum_ChargeFit()
         for(const auto& sq : allChargeProfiles)
         {
             ct->cd();
-            auto hcharge = new TH1D {TString::Format("hCharge%d", p), "Charge profile; L [mm]; Q", 50, 0, 100};
+            auto hcharge = new TH1D {TString::Format("hCharge%d", p), "Charge profile; L [mm]; Q", 50, 0, 150};
             for(size_t i = 0; i < sq.size(); ++i)
                 hcharge->Fill(sq[i].first, sq[i].second);
-            hcharge->Draw("hist");
-            auto fitSpline = FitSRIMtoChargeProfile(hcharge, srimSpline);
+            hcharge->DrawCopy("hist");
+            auto fitSpline = FitSRIMtoChargeProfile(hcharge, srimSpline, TString::Format("fSRIM%d", p));
             hcharge->Fit(fitSpline, "QR0", "", hcharge->GetXaxis()->GetXmin(), hcharge->GetXaxis()->GetXmax());
             fitSpline->SetLineWidth(3);
-            fitSpline->Draw("same");
+            fitSpline->DrawCopy("same");
 
             double chi2 = fitSpline->GetChisquare();
             double ndf = fitSpline->GetNDF();
@@ -428,9 +432,11 @@ void alphaSpectrum_ChargeFit()
             double TLfromCharge =
                 calcTLfromChargeFit(fitSpline, hcharge->GetXaxis()->GetXmin(), hcharge->GetXaxis()->GetXmax());
             double ene {srim->EvalInitialEnergy("HeInGas", 0, TLfromCharge)};
-
+            double diff {(TLfromCharge - TLfromVoxel) / TLfromVoxel * 100.};
+            if(std::abs(diff) > 10)
+                badfits++;
             std::cout << "TL from charge: " << TLfromCharge << " vs TL from last voxel: " << TLfromVoxel << " ---- ( "
-                      << (TLfromCharge - TLfromVoxel) / TLfromVoxel * 100. << " %)" << std::endl;
+                      << diff << " %)" << std::endl;
 
             hEne->Fill(ene);
             double Ex {ene * (1 + ma / mo16) - qval};
@@ -442,14 +448,54 @@ void alphaSpectrum_ChargeFit()
             ct->Update();
             ct->WaitPrimitive();
             ct->Clear();
+            delete hcharge;
+            // delete fitSpline;
         }
         delete ct;
     }
+    else
+    {
+        int p {0};
+        for(const auto& sq : allChargeProfiles)
+        {
+            auto hcharge = new TH1D {TString::Format("hCharge%d", p), "Charge profile; L [mm]; Q", 50, 0, 150};
+            hcharge->SetDirectory(nullptr);
+            for(size_t i = 0; i < sq.size(); ++i)
+                hcharge->Fill(sq[i].first, sq[i].second);
+            auto fitSpline = FitSRIMtoChargeProfile(hcharge, srimSpline, TString::Format("fSRIM%d", p));
+            hcharge->Fit(fitSpline, "QR0", "", hcharge->GetXaxis()->GetXmin(), hcharge->GetXaxis()->GetXmax());
+            double chi2 = fitSpline->GetChisquare();
+            double ndf = fitSpline->GetNDF();
+            double chi2ndf = (ndf > 0) ? chi2 / ndf : 0.0;
+            double TLfromCharge =
+                calcTLfromChargeFit(fitSpline, hcharge->GetXaxis()->GetXmin(), hcharge->GetXaxis()->GetXmax());
+            double ene {srim->EvalInitialEnergy("HeInGas", 0, TLfromCharge)};
+            double TLfromVoxel = TLsfromVoxels[p];
+            double ene2 {srim->EvalInitialEnergy("HeInGas", 0, TLfromVoxel)};
+
+            double diff {(TLfromCharge - TLfromVoxel) / TLfromVoxel * 100.};
+            if(std::abs(diff) > 10)
+                badfits++;
+
+            hEne->Fill(ene);
+            double Ex {ene * (1 + ma / mo16) - qval};
+            hEx->Fill(Ex);
+            hEne2->Fill(ene2);
+            double Ex2 {ene2 * (1 + ma / mo16) - qval};
+            hEx2->Fill(Ex2);
+
+            p++;
+            delete hcharge;
+            // delete fitSpline;
+        }
+    }
+    std::cout << "Bad fits: " << badfits << " out of " << allChargeProfiles.size() << std::endl;
+
 
     auto* c0 {new TCanvas {"c0", "", 1500, 600}};
     c0->Divide(2);
     c0->cd(1);
-    hPad.Merge()->DrawClone("colz");
+    hPad->DrawClone("colz");
 
     if(debug)
     {
@@ -461,14 +507,24 @@ void alphaSpectrum_ChargeFit()
     }
 
     c0->cd(2);
-    hSide.Merge()->DrawClone("colz");
+    hSide->DrawClone("colz");
 
     auto* c1 {new TCanvas {"c1", ""}};
     c1->DivideSquare(2);
     c1->cd(1);
-    hEne.Merge()->DrawClone();
+    hEne->SetLineWidth(2);
+    hEne->DrawClone();
+    hEne2->SetLineColor(2);
+    hEne2->SetLineWidth(3);
+    hEne2->DrawClone("same");
     c1->cd(2);
-    hEx.Merge()->DrawClone();
+    hEx->DrawClone();
+    hEx2->SetLineColor(2);
+    hEx2->DrawClone("same");
+    auto l = new TLegend(0.6, 0.8, 0.9, 0.9);
+    l->AddEntry(hEx, "from charge fit");
+    l->AddEntry(hEx2, "from last voxel");
+    l->Draw();
 
     //   alpha energies from nds to draw
     std::vector<double> energies {{2153., 2482., 3806., 4434., 4683., 4891.}};
