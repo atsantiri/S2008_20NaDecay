@@ -21,7 +21,7 @@
 #include <fstream>
 // run 129 is processed without any user functions enabled
 
-// Scale, ScalePoint and calcTl function from ActMergerDetector and ActLine classes
+// Scale, ScalePoint and calcTl functions from ActMergerDetector and ActLine classes
 void ActRoot::Line::Scale(float xy, float z)
 {
     // Point
@@ -42,7 +42,7 @@ void ScalePoint(ROOT::Math::XYZPointF& point, float xy, float z)
     point.SetZ(point.Z() * z);
 }
 
-double calcTL(ROOT::Math::XYZPointF A, ROOT::Math::XYZPointF B, ActRoot::Line line, double drift)
+double calcTLfromVoxel(ROOT::Math::XYZPointF A, ROOT::Math::XYZPointF B, ActRoot::Line line, double drift)
 {
     ActRoot::TPCParameters params;
     double xy = params.GetPadSide();
@@ -187,7 +187,7 @@ double FindPositionFromChargeFraction(
     return h->GetXaxis()->GetXmax();
 }
 
-TF1* FitSRIMtoChargeProfile(TH1* hcharge, TSpline3* srimSpline, TString fname)
+TF1* FitSRIMtoChargeProfile(TH1* hcharge, TSpline3* srimSpline, TString fname) // a bit different from Ivan's version
 {
     if(!srimSpline || !hcharge)
         return nullptr;
@@ -263,7 +263,7 @@ calcTLfromChargeFit(TF1* f, double xMin, double xMax) // find location where fit
         double y = f->Eval(x);
         if(y <= threshold)
         {
-            // Linear interpolation
+            // Linear interp
             double x0 = x - dx;
             double y0 = f->Eval(x0);
             if(y0 == y)
@@ -279,17 +279,21 @@ calcTLfromChargeFit(TF1* f, double xMin, double xMax) // find location where fit
 void alphaSpectrum_ChargeFit()
 {
     // ========================================================================================================================================
+    // Input Stuff
+    // ========================================================================================================================================
     ROOT::Math::XYZPointF beamEndPoint {105, 65, 0}; // visually inspected output of Pipe0
     double maxDist {2.};                             // max distance from beam stop point
     double edge {5.};                                // min distance from Z wall to remove tracks
                                                      // that come from the pad plane - 20Na drifted before decaying
     bool debug {false}; // set to true if we're testing. Otherwise we will do only few events
-    int kmax {15};     // how many events to look at
-    std::string srimfile {"../../Calibrations/SRIM/4He_950mbar_95-5.txt"};    
+    int kmax {15};      // how many events to look at
+    std::string srimfile {"../../Calibrations/SRIM/4He_950mbar_95-5.txt"};
     double qval {-4.73};
     double ma {4.0026};      // amu
     double mo16 {15.994914}; // amu
     // ========================================================================================================================================
+    // ========================================================================================================================================
+
 
     ActRoot::DataManager dataman {"../../configs/data.conf", ActRoot::ModeType::EFilter};
     auto chain {dataman.GetChain()};
@@ -376,7 +380,7 @@ void alphaSpectrum_ChargeFit()
                                 // get charge profile
                                 SQ sq = getChargeProf(c, startVoxelPos, endVoxelPos, dir, drift);
                                 allChargeProfiles.push_back(std::move(sq));
-                                TLsfromVoxels.push_back(calcTL(startVoxelPos, endVoxelPos, line, drift));
+                                TLsfromVoxels.push_back(calcTLfromVoxel(startVoxelPos, endVoxelPos, line, drift));
 
                                 if(debug)
                                 {
@@ -398,7 +402,7 @@ void alphaSpectrum_ChargeFit()
     std::cout << "size " << allChargeProfiles.size() << std::endl;
     int badfits {0};
 
-    if(debug)
+    if(debug) // allChargeParticles should include very few events so we can plot them and inspect the fit
     {
         auto* ct {new TCanvas {"ct", "Testing", 800, 600}};
         int p {0};
@@ -449,11 +453,10 @@ void alphaSpectrum_ChargeFit()
             ct->WaitPrimitive();
             ct->Clear();
             delete hcharge;
-            // delete fitSpline;
         }
         delete ct;
     }
-    else
+    else // we parsed through all events
     {
         int p {0};
         for(const auto& sq : allChargeProfiles)
@@ -486,11 +489,9 @@ void alphaSpectrum_ChargeFit()
 
             p++;
             delete hcharge;
-            // delete fitSpline;
         }
     }
     std::cout << "Bad fits: " << badfits << " out of " << allChargeProfiles.size() << std::endl;
-
 
     auto* c0 {new TCanvas {"c0", "", 1500, 600}};
     c0->Divide(2);
