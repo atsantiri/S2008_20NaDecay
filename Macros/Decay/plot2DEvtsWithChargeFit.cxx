@@ -11,8 +11,6 @@
 #include "ROOT/RDF/RInterface.hxx"
 #include "ROOT/RDataFrame.hxx"
 
-#include "./miscFunctions.cxx"
-
 #include "TCanvas.h"
 #include "TLatex.h"
 #include "TLegend.h"
@@ -21,9 +19,10 @@
 #include <TF1.h>
 
 #include <fstream>
-// run 129 is processed without any user functions enabled
 
-void alphaSpectrum_ChargeFit()
+#include "./miscFunctions.cxx"
+
+void plot2DEvtsWithChargeFit()
 {
     // ========================================================================================================================================
     // Input Stuff
@@ -32,8 +31,7 @@ void alphaSpectrum_ChargeFit()
     double maxDist {2.};                             // max distance from beam stop point
     double edge {5.};                                // min distance from Z wall to remove tracks
                                                      // that come from the pad plane - 20Na drifted before decaying
-    bool debug {false}; // set to true if we're testing. Otherwise we will do only few events
-    int kmax {15};     // how many events to look at
+    int kmax {10};                                   // how many events to look at
     std::string srimfile {"../../Calibrations/SRIM/4He_950mbar_95-5.txt"};
     double qval {-4.73};
     double ma {4.0026};      // amu
@@ -56,17 +54,6 @@ void alphaSpectrum_ChargeFit()
     auto drift {bl1->GetDouble("DriftFactor")};
     std::cout << drift << std::endl;
 
-    auto hPad = new TH2F("hPad", "Pad;X [pad];Y [pad]", TPCparams.GetNPADSX(), 0, TPCparams.GetNPADSX(),
-                         TPCparams.GetNPADSY(), 0, TPCparams.GetNPADSY());
-
-    auto hSide = new TH2F("hSide", "Side;X [pad];Z [tb]", TPCparams.GetNPADSX(), 0, TPCparams.GetNPADSX(),
-                          TPCparams.GetNPADSZ() / 4, 0, TPCparams.GetNPADSZ());
-
-    auto hEne = new TH1F("hEne", "Alpha Energy; E_{#alpha} [MeV]; ", 200, 0, 7);
-    auto hEne2 = new TH1F("hEneVoxel", "Alpha Energy; E_{#alpha} [MeV]; ", 200, 0, 7);
-    auto hEx = new TH1F("hEx", "Excitation Energy; E_{20Ne*} [MeV]; ", 200, 4, 14);
-    auto hEx2 = new TH1F("hExVoxel", "Excitation Energy; E_{20Ne*} [MeV]; ", 200, 4, 14);
-    std::cout << TPCparams.GetNPADSZ() << " " << TPCparams.GetREBINZ() << std::endl;
 
     auto* srim {new ActPhysics::SRIM()};
     const std::string& particleKey = "HeInGas";
@@ -74,12 +61,10 @@ void alphaSpectrum_ChargeFit()
     auto srimSpline {buildSRIMspline(srim, 100, particleKey)};
 
     ROOT::Math::XYZVectorF beam = {1, 0, 0};
-
-    std::vector<std::shared_ptr<TPolyLine>> ls;
-    std::vector<double> xsA, ysA, xsB, ysB;
     using SQ = std::vector<std::pair<double, double>>;
     int k = 0;
-    auto* ct {new TCanvas {"ct", "Testing", 800, 600}};
+    auto* ct {new TCanvas {"ct", "Testing", 1500, 600}};
+    ct->Divide(2);
     int badfits {0};
 
     d.Foreach(
@@ -90,7 +75,7 @@ void alphaSpectrum_ChargeFit()
                 auto& clusters = tpc.fClusters;
                 for(auto& c : clusters)
                 {
-                    if((k < kmax) || !debug)
+                    if((k < kmax))
                     {
                         if(!c.GetIsBeamLike())
                         {
@@ -116,15 +101,10 @@ void alphaSpectrum_ChargeFit()
 
                             if((lxy <= maxDist) && !forwardCone && !isNearEdge)
                             {
-                                for(const auto& v : c.GetVoxels())
-                                {
-                                    auto& pos {v.GetPosition()};
-                                    hPad->Fill(pos.X(), pos.Y());
-                                    hSide->Fill(pos.X(), pos.Z() * drift);
-                                }
 
                                 // get charge profile
                                 SQ sq = getChargeProf(c, startVoxelPos, endVoxelPos, dir, drift);
+
                                 auto hcharge =
                                     new TH1D {TString::Format("hCharge%d", k), "Charge profile; L [mm]; Q", 50, 0, 150};
 
@@ -150,129 +130,50 @@ void alphaSpectrum_ChargeFit()
                                 if(std::abs(diff) > 10)
                                     badfits++;
 
-                                hEne->Fill(ene);
-                                double Ex {ene * (1 + ma / mo16) - qval};
-                                hEx->Fill(Ex);
-                                hEne2->Fill(ene2);
-                                double Ex2 {ene2 * (1 + ma / mo16) - qval};
-                                hEx2->Fill(Ex2);
-                                if(debug)
+                                auto hCharge2D = new TH2F(TString::Format("hCharge2D%d", k), ";x [pad], y [pad]",
+                                                          TPCparams.GetNPADSX(), 0, TPCparams.GetNPADSX(),
+                                                          TPCparams.GetNPADSY(), 0, TPCparams.GetNPADSY());
+                                for(const auto& v : c.GetVoxels())
+                                    hCharge2D->Fill(v.GetPosition().X(), v.GetPosition().Y(), v.GetCharge());
+
+                                ct->cd(1);
+                                hcharge->DrawCopy("hist");
+                                fitSpline->SetLineWidth(3);
+                                fitSpline->DrawCopy("same");
+
+                                ct->cd(2);
+                                hCharge2D->Draw("LEGO2");
+
+                                std::cout << "\n===== Fit Results: " << fitSpline->GetName() << " =====\n";
+                                int npar = fitSpline->GetNpar();
+                                for(int i = 0; i < npar; ++i)
                                 {
-                                    xsA.push_back(startVoxelPos.X());
-                                    ysA.push_back(startVoxelPos.Y());
-
-                                    ct->cd();
-                                    hcharge->DrawCopy("hist");
-                                    fitSpline->SetLineWidth(3);
-                                    fitSpline->DrawCopy("same");
-
-                                    std::cout << "\n===== Fit Results: " << fitSpline->GetName() << " =====\n";
-                                    int npar = fitSpline->GetNpar();
-                                    for(int i = 0; i < npar; ++i)
-                                    {
-                                        std::cout << std::setw(10) << fitSpline->GetParName(i) << " = " << std::setw(12)
-                                                  << fitSpline->GetParameter(i) << " ± " << std::setw(12)
-                                                  << fitSpline->GetParError(i) << "\n";
-                                    }
-                                    std::cout << "-----------------------------------\n";
-                                    std::cout << "Chi2 / NDF = " << chi2 << " / " << ndf << " = " << chi2ndf << "\n";
-
-                                    std::cout << "TL from charge: " << TLfromCharge
-                                              << " vs TL from last voxel: " << TLfromVoxel << " ---- ( " << diff
-                                              << " %)" << std::endl;
-
-                                    ct->Update();
-                                    ct->WaitPrimitive();
-                                    ct->Clear();
+                                    std::cout << std::setw(10) << fitSpline->GetParName(i) << " = " << std::setw(12)
+                                              << fitSpline->GetParameter(i) << " ± " << std::setw(12)
+                                              << fitSpline->GetParError(i) << "\n";
                                 }
+                                std::cout << "-----------------------------------\n";
+                                std::cout << "Chi2 / NDF = " << chi2 << " / " << ndf << " = " << chi2ndf << "\n";
+
+                                std::cout << "TL from charge: " << TLfromCharge
+                                          << " vs TL from last voxel: " << TLfromVoxel << " ---- ( " << diff << " %)"
+                                          << std::endl;
+
+                                ct->Update();
+                                ct->WaitPrimitive();
+                                ct->Clear();
+                                ct->Divide(2);
+
+                                delete hCharge2D;
+
                                 delete hcharge;
 
                                 k++;
                             }
                         }
                     }
-                    // k++;
                 }
             }
         },
         {"TPCData"});
-    delete ct;
-
-    // Draw
-    std::cout << "size " << k << std::endl;
-    std::cout << "Bad fits: " << badfits << " out of " << k << std::endl;
-
-    auto* c0 {new TCanvas {"c0", "", 1500, 600}};
-    c0->Divide(2);
-    c0->cd(1);
-    hPad->DrawClone("colz");
-
-    if(debug)
-    {
-        auto* gBegins = new TGraph(xsA.size(), xsA.data(), ysA.data());
-        gBegins->SetMarkerStyle(20);
-        gBegins->SetMarkerSize(0.8);
-        gBegins->SetMarkerColor(kRed);
-        gBegins->Draw("P same");
-    }
-
-    c0->cd(2);
-    hSide->DrawClone("colz");
-
-    auto* c1 {new TCanvas {"c1", ""}};
-    c1->DivideSquare(2);
-    c1->cd(1);
-    hEne->SetLineWidth(2);
-    hEne->DrawClone();
-    hEne2->SetLineColor(2);
-    hEne2->SetLineWidth(3);
-    hEne2->DrawClone("same");
-    c1->cd(2);
-    hEx->DrawClone();
-    hEx2->SetLineColor(2);
-    hEx2->DrawClone("same");
-    auto l = new TLegend(0.6, 0.8, 0.9, 0.9);
-    l->AddEntry(hEx, "from charge fit");
-    l->AddEntry(hEx2, "from last voxel");
-    l->Draw();
-
-    //   alpha energies from nds to draw
-    std::vector<double> energies {{2153., 2482., 3806., 4434., 4683., 4891.}};
-    std::vector<double> intensities {{15.96, 0.583, 0.241, 2.88, 0.09, 0.174}};
-    std::vector<int> colors {{6, 2, 4, 6, 2, 4}};
-    int i = 0;
-    c1->cd(1);
-    for(auto& s : energies)
-    {
-        TLine* st = new TLine(s * 1e-3, 0, s * 1e-3, 1800 - i * 200);
-        st->SetLineColor(colors[i]);
-        st->SetLineStyle(2);
-        st->Draw("same");
-        // auto t = new TLatex(s * 1e-3 - 0.02, 1800 - i * 200, Form("%.2f (%.2f%%)", s * 1e-3, intensities[i]));
-        auto t = new TLatex(s * 1e-3 - 0.02, 1800 - i * 200, Form("%.2f", s * 1e-3));
-        t->SetTextColor(colors[i]);
-        t->SetTextSize(0.03);
-        t->Draw("same");
-        i++;
-    }
-
-
-    //  20Ne levels
-    std::vector<double> exs {{7421., 7833., 9487., 10273., 10584., 10843.}};
-    // std::vector<double> intensities {{15.96, 0.583, 0.241, 2.88, 0.09, 0.174}};
-    // std::vector<int> colors {{6,2,4,6,2,4}};
-    i = 0;
-    c1->cd(2);
-    for(auto& s : exs)
-    {
-        TLine* st = new TLine(s * 1e-3, 0, s * 1e-3, 1900 - i * 200);
-        st->SetLineColor(colors[i]);
-        st->SetLineStyle(2);
-        st->Draw("same");
-        auto t = new TLatex(s * 1e-3 - 0.02, 1900 - i * 200, Form("%.2f (%.2f%%)", s * 1e-3, intensities[i]));
-        t->SetTextColor(colors[i]);
-        t->SetTextSize(0.03);
-        t->Draw("same");
-        i++;
-    }
 }
