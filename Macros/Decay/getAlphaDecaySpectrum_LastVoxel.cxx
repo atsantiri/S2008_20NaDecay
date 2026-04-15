@@ -17,68 +17,20 @@
 #include "TMath.h"
 
 #include <fstream>
-// run 129 is processed without any user functions enabled
 
-// Scale, ScalePoint and calcTl function from ActMergerDetector and ActLine classes
-void ActRoot::Line::Scale(float xy, float z)
-{
-    // Point
-    fPoint.SetX(fPoint.X() * xy);
-    fPoint.SetY(fPoint.Y() * xy);
-    fPoint.SetZ(fPoint.Z() * z);
-    // Direction
-    fDirection.SetX(fDirection.X() * xy);
-    fDirection.SetY(fDirection.Y() * xy);
-    fDirection.SetZ(fDirection.Z() * z);
-}
-
-void ScalePoint(ROOT::Math::XYZPointF& point, float xy, float z)
-{
-    point += ROOT::Math::XYZVector {0.5, 0.5, 0.5};
-    point.SetX(point.X() * xy);
-    point.SetY(point.Y() * xy);
-    point.SetZ(point.Z() * z);
-}
-
-double calcTL(ROOT::Math::XYZPointF A, ROOT::Math::XYZPointF B, ActRoot::Line line, double drift)
-{
-    ActRoot::TPCParameters params;
-    double xy = params.GetPadSide();
-
-    ScalePoint(A, xy, drift);
-    ScalePoint(B, xy, drift);
-    line.Scale(xy, drift);
-
-    auto projBegin {line.ProjectionPointOnLine(A)};
-    auto projEnd {line.ProjectionPointOnLine(B)};
-    return (projBegin - projEnd).R();
-}
-
-double calcDist(ROOT::Math::XYZPointF A, ROOT::Math::XYZPointF B)
-{
-    return TMath::Sqrt(TMath::Power(A.X() - B.X(), 2) + TMath::Power(A.Y() - B.Y(), 2));
-}
+#include "./miscFunctions.cxx"
 
 void getAlphaDecaySpectrum_LastVoxel()
 {
-    ActRoot::DataManager dataman {"../../configs/data.conf", ActRoot::ModeType::EFilter};
-    auto chain {dataman.GetChain()};
-    auto chain2 {dataman.GetChain(ActRoot::ModeType::EMerge)};
-    chain->AddFriend(chain2.get());
-    auto chain3 {dataman.GetChain(ActRoot::ModeType::EReadSilMod)};
-    chain->AddFriend(chain3.get());
-
     ROOT::EnableImplicitMT();
-    ROOT::RDataFrame d {*chain};
+    std::string fIn {"../../PostAnalysis/Outputs/tree_20Na_decays.root"};
+    ROOT::RDataFrame d {"Decay_Tree", fIn};
 
     ROOT::TThreadedObject<TH2F> h2d("hPad", "Pad plane;X [pad];Y [pad]", 128, 0, 128, 128, 0, 128);
     ROOT::TThreadedObject<TH2F> h2dS("hPadS", "Pad plane (Sample events);X [pad];Y [pad]", 128, 0, 128, 128, 0, 128);
     ROOT::TThreadedObject<TH1F> hEne("hEne", "Alpha Energy; E_{#alpha} [MeV]; ", 400, 0, 7);
     ROOT::TThreadedObject<TH1F> hEx("hEx", "Excitation Energy; E_{20Ne*} [MeV]; ", 400, 4, 14);
 
-    ROOT::Math::XYZPointF beamEndPoint {105, 65, 0}; // visually inspected output of Pipe0
-    double maxDist {2.};                             // max distance from beam stop point
-    double edge {2.}; // min distance from x wall to remove tracks that out of the pad plane
 
     ActRoot::InputParser parserDet {"../../configs/detector.conf"};
     auto bl1 {parserDet.GetBlock("Merger")};
@@ -89,114 +41,50 @@ void getAlphaDecaySpectrum_LastVoxel()
     srim->ReadTable("HeInGas", "../../Calibrations/SRIM/4He_950mbar_95-5.txt");
     // srim->ReadTable("HeInGas", "../../Calibrations/SRIM/He_actar_192g_1.07_38.8stoich.txt");
 
-    ROOT::Math::XYZVectorF beam = {1, 0, 0};
     double qval {-4.73};
     double ma {4.0026};      // amu
     double mo16 {15.994914}; // amu
-    int k = 0;
-    std::vector<std::shared_ptr<TPolyLine>> ls;
 
     std::vector<double> xsA, ysA, xsB, ysB;
 
-
     d.Foreach(
-        [&](ActRoot::TPCData& tpc)
+        [&](ActRoot::TPCData& tpc, std::vector<bool> isDecay)
         {
             if(tpc.fRPs.empty())
             {
                 auto& clusters = tpc.fClusters;
                 for(auto& c : clusters)
                 {
-                    if(!c.GetIsBeamLike())
+                    if(isDecay[c.GetClusterID()])
                     {
                         auto line {c.GetRefToLine()};
-                        auto dir {line.GetDirection()};
                         c.SortAlongDir();
 
                         auto firstPoint {c.GetRefToVoxels().front().GetPosition()};
                         auto lastPoint {c.GetRefToVoxels().back().GetPosition()};
 
-                        double lxyA = calcDist(firstPoint, beamEndPoint);
-                        double lxyB = calcDist(lastPoint, beamEndPoint);
-
-                        // remove tracks that don't stop in the pad plane, note this will affect relative peak
-                        // intensities
-                        bool isNearEdge {(128. - firstPoint.X()) <= edge || (128. - firstPoint.Y()) <= edge ||
-                                         (128. - lastPoint.X()) <= edge || (128. - lastPoint.Y()) <= edge};
-
-                        // alternatively I can remove a cone for forward angles up to 65 deg
-                        auto dot {beam.Unit().Dot(dir.Unit())};
-                        double angle = TMath::ACos(dot) * TMath::RadToDeg();
-
-                        // if((lxyA <= maxDist || lxyB <= maxDist) && isNearEdge)
-                        if((lxyA <= maxDist || lxyB <= maxDist) &&
-                           (angle >= 65. || (firstPoint.X() <= beamEndPoint.X() && lastPoint.X() <= beamEndPoint.X())))
+                        for(const auto& v : c.GetVoxels())
                         {
-                            for(const auto& v : c.GetVoxels())
-                            {
-                                auto& pos {v.GetPosition()};
-                                h2d->Fill(pos.X(), pos.Y());
-                            }
-                            double TL = calcTL(firstPoint, lastPoint, line, drift);
-                            double ene {srim->EvalInitialEnergy("HeInGas", 0, TL)};
-                            hEne->Fill(ene);
-                            double Ex {ene * (1 + ma / mo16) - qval};
-                            hEx->Fill(Ex);
-
-                            // test by plotting first few particles
-                            if(k > 2 && k < 6)
-                            {
-                                for(const auto& v : c.GetVoxels())
-                                {
-                                    auto& pos {v.GetPosition()};
-                                    h2dS->Fill(pos.X(), pos.Y());
-                                }
-                                xsA.push_back(firstPoint.X());
-                                xsB.push_back(lastPoint.X());
-                                ysA.push_back(firstPoint.Y());
-                                ysB.push_back(lastPoint.Y());
-                                // std::cout << "begin x: " << firstPoint.X() << ", y: " << firstPoint.Y() << std::endl;
-                                // std::cout << "begin x: " << lastPoint.X() << ", y: " << lastPoint.Y() << std::endl;
-                                ls.push_back(line.GetPolyLine("xy", 0, 128, 128, 400, 4));
-                            }
-                            k++;
+                            auto& pos {v.GetPosition()};
+                            h2d->Fill(pos.X(), pos.Y());
                         }
+                        double TL = calcTLfromVoxel(firstPoint, lastPoint, line, drift);
+                        double ene {srim->EvalInitialEnergy("HeInGas", 0, TL)};
+                        hEne->Fill(ene);
+                        double Ex {ene * (1 + ma / mo16) - qval};
+                        hEx->Fill(Ex);
                     }
                 }
             }
         },
-        {"TPCData"});
+        {"TPCData", "isDecay"});
 
 
     // Draw
-    auto* c0 {new TCanvas {"c0", "", 2200, 800}};
-    c0->Divide(3);
-
-    c0->cd(1);
-    h2dS.Merge()->DrawClone("colz");
-    auto gA = new TGraph(xsA.size(), xsA.data(), ysA.data());
-    auto gB = new TGraph(xsB.size(), xsB.data(), ysB.data());
-    gA->SetMarkerStyle(20);
-    gA->SetMarkerSize(1.2);
-    gA->SetMarkerColor(kRed);
-    gB->SetMarkerStyle(20);
-    gB->SetMarkerSize(1.2);
-    gB->SetMarkerColor(kMagenta + 2);
-    gA->Draw("P same");
-    gB->Draw("P same");
-
-    for(auto& l : ls)
-    {
-        auto g = new TGraph(l->GetN());
-        for(int i = 0; i < l->GetN(); ++i)
-            g->SetPoint(i, l->GetX()[i], l->GetY()[i]);
-        g->Draw("L same");
-    }
-
-    c0->cd(2);
+    auto* c0 {new TCanvas {"c0", "", 800, 600}};
     h2d.Merge()->DrawClone("colz");
 
-    auto* c1 {new TCanvas {"c1", ""}};
+    auto* c1 {new TCanvas {"c1", "", 1200,600}};
     c1->DivideSquare(2);
     c1->cd(1);
     hEne.Merge()->DrawClone();

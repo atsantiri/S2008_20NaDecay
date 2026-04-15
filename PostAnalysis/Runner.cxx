@@ -51,4 +51,11 @@ void Runner(TString what = "")
         gROOT->LoadMacro(path + func + ext);
         gROOT->ProcessLine(func + args);
     }
+    // 20Na Decay
+        if(what.Contains("d"))
+    {
+        func = "Pipe_Decay";
+        gROOT->LoadMacro(path + func + ext);
+        gROOT->ProcessLine(func+"()");
+    }
 }

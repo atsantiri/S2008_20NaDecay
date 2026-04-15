@@ -14,7 +14,7 @@
 #include <fstream>
 
 void getDecayEvts()
-// This macro assumes that data was processed with user filter [CorrelateImplantDecay] enabled and
+// This macro assumes that data was processed with user filter [FindDecays] enabled and
 // "EnableDeleteInvalidCluster" of [FindRP] set to false!
 {
     ActRoot::DataManager dataman {"../../configs/data.conf", ActRoot::ModeType::EFilter};
@@ -27,13 +27,18 @@ void getDecayEvts()
     ROOT::EnableImplicitMT();
     ROOT::RDataFrame df {*chain};
 
-    std::ofstream streamer {"../Outputs/correlatedDecays20Na.txt"};
+    int decaysTotal {0};
+    std::ofstream streamer {"../Outputs/decays20Na.txt"};
     df.Foreach(
         [&](ActRoot::MergerData& mer, ActRoot::TPCData& tpc)
         {
             auto& clusters = tpc.fClusters;
             if(!clusters.empty())
+            {
                 mer.Stream(streamer);
+                decaysTotal++;
+            }
         },
         {"MergerData", "TPCData"});
+    std::cout << decaysTotal << " events have a decay" << std::endl;
 }

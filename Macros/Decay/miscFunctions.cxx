@@ -17,6 +17,8 @@
 
 #include <fstream>
 
+// Misc functions used by macros in this directory, to avoid multiple copies
+
 // Scale, ScalePoint and calcTl functions from ActMergerDetector and ActLine classes
 void ActRoot::Line::Scale(float xy, float z)
 {
@@ -270,4 +272,194 @@ calcTLfromChargeFit(TF1* f, double xMin, double xMax) // find location where fit
     }
 
     return -1;
+}
+
+// Updating Bragg model spline building and fitting to match Jerome's parameterization of fB(λ), where λ is the length
+// from 0 to 1, and the max amplitude fΒ(λ) is 1
+TSpline3* buildSRIMSplineJ(ActPhysics::SRIM* srim, const std::string& particleKey, double L0 = 100., double step = 0.5,
+                           double sOffset = 0.0) // total range L0 in mm. 5 MeV alpha has range ~10cm.
+{
+    std::vector<double> l_pts;
+    std::vector<double> f_pts;
+
+    for(double s = 0; s < L0; s += step)
+    {
+        double L = L0 - s; // remaining range
+        if(L <= 0)
+            break;
+
+        double E = srim->EvalInverse(particleKey, L);
+        double dEdx = srim->EvalStoppingPower(particleKey, E);
+
+        if(dEdx < 0)
+            dEdx = 0;
+
+        double lambda = (s + 0.5 * step) / L0; // lambda normalized to [0,1] from Aurora's thesis
+
+        l_pts.push_back(lambda);
+        f_pts.push_back(dEdx);
+    }
+    // force endpoint at lambda = 1 → 0
+    if(!f_pts.empty() && f_pts.back() > 0)
+    {
+        l_pts.push_back(1.0);
+        f_pts.push_back(0.0);
+    }
+
+    if(l_pts.size() < 3)
+    {
+        std::cout << "Not enough points to build spline (nSteps=" << l_pts.size() << "). Need at least 3 points.\n";
+        return nullptr;
+    }
+
+    // normalize fB to 1
+    double maxVal = *std::max_element(f_pts.begin(), f_pts.end());
+    if(maxVal > 0)
+    {
+        for(auto& f : f_pts)
+            f /= maxVal;
+    }
+    auto* sp = new TSpline3(("spSRIMJ_" + particleKey).c_str(), l_pts.data(), f_pts.data(), l_pts.size());
+
+    sp->SetNpx(3000);
+    std::cout << "Spline lambda from " << sp->GetXmin() << " to " << sp->GetXmax() << "\n";
+    std::cout << "Value at lambda = 0 : " << sp->Eval(0) << ", and at lambda = 1: " << sp->Eval(1) << "\n";
+    return sp;
+}
+
+// parameters here are: 1) Bragg amplitude scaling: AB (same as Ivan's). 2) Bragg length fraction: λB corresponding to
+// the expected energy: the portion of the charge deposit ranges from λ=1-λB (beginning of the track) to 1 (end of the
+// Bragg peak, where the particle stops)
+TF1* FitSRIMtoChargeProfileJ(TH1* hcharge, TSpline3* srimSpline, double L0, TString fname)
+{
+
+    double xmin = FindPositionFromChargeFraction(hcharge, 0.001);
+    double xmax = FindPositionFromChargeFraction(hcharge, 1.);
+
+    if(!srimSpline || !hcharge)
+        return nullptr;
+
+    TF1* fit = new TF1(
+        fname,
+        [=](double* x, double* par)
+        {
+            double AB = par[0];
+            double lambdaB = par[1];
+            double lambda = x[0] + (1 - lambdaB);
+
+            if(lambda < 0.0 || lambda > 1.0)
+                return 0.0;
+
+            return AB * srimSpline->Eval(lambda);
+        },
+        xmin, xmax, 2);
+
+    fit->SetParNames("AB", "lambdaB");
+
+    fit->SetParLimits(0, 0, 1e8);
+    fit->SetParLimits(1, 0.0, 1.0);
+    fit->SetParameters(hcharge->Integral("width") / hcharge->GetNbinsX(), // amplitude
+                       xmax);                                             // shift
+    fit->SetNpx(3000);
+
+    return fit;
+}
+
+// TH1D* ConvertToLambdaSpace(TH1* hcharge, double L0, TString name)
+// {
+//     int nbins = hcharge->GetNbinsX();
+
+//     TH1D* hlambda = new TH1D(name, name, nbins, 0, 1);
+
+//     for(int i = 1; i <= nbins; i++)
+//     {
+//         double s = hcharge->GetBinCenter(i);
+//         double lambda = s / L0;
+//         double content = hcharge->GetBinContent(i);
+//         double error = hcharge->GetBinError(i);
+
+//         int bin = hlambda->FindBin(lambda);
+
+//         hlambda->SetBinContent(bin, content);
+//         hlambda->SetBinError(bin, std::sqrt(std::pow(hlambda->GetBinError(bin), 2) + error * error));
+//     }
+
+//     return hlambda;
+// }
+TH1D* ConvertToLambdaSpace(TH1* hcharge, double L0, const TString& name)
+{
+    int nbins = hcharge->GetNbinsX();
+
+    auto* hlambda = new TH1D(name, name, nbins, 0, 1);
+
+    for(int i = 1; i <= nbins; i++)
+    {
+        double s = hcharge->GetBinCenter(i);
+        int bin = int((s / L0) * nbins) + 1;
+
+        if(bin < 1 || bin > nbins) continue;
+
+        double content = hcharge->GetBinContent(i);
+        double error   = hcharge->GetBinError(i);
+
+        double prevErr = hlambda->GetBinError(bin);
+        hlambda->SetBinContent(bin, hlambda->GetBinContent(bin) + content);
+        hlambda->SetBinError(bin, std::sqrt(prevErr*prevErr + error*error));
+    }
+
+    return hlambda;
+}
+
+double ComputeChi2(TH1* h, TF1* f, int& ndf)
+{
+    if(!h || !f)
+        return -1;
+
+    double chi2 = 0.0;
+    int npoints = 0;
+
+    int nbins = h->GetNbinsX();
+
+    for(int i = 1; i <= nbins; ++i)
+    {
+        double x = h->GetBinCenter(i);
+        double y = h->GetBinContent(i);
+        double err = h->GetBinError(i);
+
+        if(err <= 0) // skip empty or undefined bins
+            continue;
+
+        double yfit = f->Eval(x);
+
+        chi2 += (y - yfit) * (y - yfit) / (err * err);
+        npoints++;
+    }
+
+    int npar = f->GetNpar();
+    ndf = npoints - npar;
+
+    return chi2;
+}
+
+void printProgress(int nTot, int k)
+{
+    if((k % (nTot / 100 + 1) == 0))
+    {
+        float progress = (float)k / nTot;
+        int barWidth = 50;
+
+        std::cout << "[";
+        int pos = barWidth * progress;
+        for(int j = 0; j < barWidth; ++j)
+        {
+            if(j < pos)
+                std::cout << "=";
+            else if(j == pos)
+                std::cout << ">";
+            else
+                std::cout << " ";
+        }
+        std::cout << "] " << int(progress * 100.0) << " %\r";
+        std::cout.flush();
+    }
 }
